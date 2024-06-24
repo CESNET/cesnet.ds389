@@ -1,0 +1,26 @@
+ldap_ds389_server_name:     "{{ inventory_hostnamee }}"
+ldap_ds389_instance_name: "example.org"
+
+ldap_ds389_basedn:  '{{ "dc=" + ldap_ds389_instance_name.split(".") | join(",dc=") }}'
+ldap_ds389_root_dn:  '{{ "cn=admin," + ldap_ds389_basedn }}'  
+ldap_ds389_root_pass: "testtest"
+
+ldap_ds389_certificate_file: "/etc/letsencrypt/live/{{ ldap_ds389_server_name }}/cert.pem"
+ldap_ds389_certificate_key_file: "/etc/letsencrypt/live/{{ ldap_ds389_server_name }}/privkey.pem"
+ldap_ds389_certificate_chain_file: "/etc/letsencrypt/live/{{ ldap_ds389_server_name }}/chain.pem"
+
+ldap_ds389_repl_bind_dn: "cn=replication manager,cn=config"
+ldap_ds389_repl_pass: "password1233"
+ldap_ds389_set_up_consumer_replica: false
+ldap_ds389_set_up_supplier_replica: false
+ldap_ds389_replication_argument_name: ""
+ldap_ds389_replica_consumer_host: ""
+
+
+ldap_ds389_users:
+  - user: "proxy"
+    password: "test"
+    description: "user for IdP Proxy"
+
+ldap_ds389_pass_through_authentication: no
+
