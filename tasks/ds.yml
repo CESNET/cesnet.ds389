@@ -1,0 +1,345 @@
+- name: "Debian 11+ required"
+  assert:
+    that:
+      - ansible_distribution == "Debian"
+      - ansible_distribution_major_version is version('11','>=')
+    msg: "Only Debian 11+ is supported, this is {{ ansible_distribution }} {{ ansible_distribution_major_version }}"
+    quiet: true
+
+
+- name: "Install 389 Direct Server"
+  apt:
+    state: present
+    name:
+      - 389-ds-base
+      - 389-ds-base-libs
+      - python3-ldap
+
+
+- name: "Test if instance exists"
+  stat:
+    path: "/etc/dirsrv/slapd-{{ldap_ds389_instance_name}}/dse.ldif"
+  register: instance_file
+
+
+- name: "Debug instance file check"
+  debug:
+    msg: "Does instance file exist? {{ instance_file.stat.exists }}"
+
+
+- name: "Create instance"
+  when: not instance_file.stat.exists
+  block:
+    - name: "create .inf file"
+      template:
+        src: templates/dirsrv.inf.j2
+        dest:  /tmp/ds389.inf
+    - name: "create instance from .inf file"
+      shell:
+        cmd: dscreate from-file /tmp/ds389.inf
+
+- name: "TLS setup"
+  # This code is complex because DS389 does not read certificates from files, it uses a NSS database located in files
+  # key4.db and cert9.db in each instance's directory. The NSS database must contain an entry with the nick "Server-Cert"
+  # containing a certificate and a private key, and a separate entry containing the CA chain. The nick of the used
+  # certificate and private key is specified in the LDAP object cn=RSA,cn=encryption,cn=config in the value of its
+  # attribute nsSSLPersonalitySSL.
+  #
+  # This block thus *idempotently* copies certificate, private key and CA chain from files described in the variables
+  # {{ ldap_ds389_certificate_file }}, {{ ldap_ds389_certificate_key_file }} and {{ ldap_ds389_certificate_chain_file }} respectively
+  # into the NSS database.
+  block:
+    - name: "install python3-cryptography"
+      apt:
+        state: present
+        name:
+          - python3-cryptography
+    - name: "certificate and key setup"
+      block:
+        - name: "test cert existence in NSS"
+          command: "certutil -L -d /etc/dirsrv/slapd-{{ ldap_ds389_instance_name }}/ -a -n Server-Cert "
+          register: used_cert_pem
+          failed_when: false
+          changed_when: false
+        - name: "first import of cert and key"
+          when: used_cert_pem.rc != 0
+          command: "dsctl {{ ldap_ds389_instance_name }} tls import-server-key-cert {{ ldap_ds389_certificate_file }} {{ ldap_ds389_certificate_key_file }}"
+        - name: "get cert from NSS in PEM format"
+          command: "certutil -L -d /etc/dirsrv/slapd-{{ ldap_ds389_instance_name }}/ -a -n Server-Cert "
+          register: used_cert_pem
+          changed_when: false
+        - name: "parse PEM cert into used_cert variable"
+          community.crypto.x509_certificate_info:
+            content: "{{ used_cert_pem.stdout }}"
+          register: used_cert
+        - name: "read file with requested certificate into requested_cert variable"
+          community.crypto.x509_certificate_info:
+            path: "{{ ldap_ds389_certificate_file }}"
+          register: requested_cert
+        - name: "replace cert and key"
+          when: requested_cert.serial_number != used_cert.serial_number
+          command: "dsctl {{ ldap_ds389_instance_name }} tls import-server-key-cert {{ ldap_ds389_certificate_file }} {{ ldap_ds389_certificate_key_file }}"
+          register: replaced_cert
+    - name: "CA chain setup"
+      block:
+        - name: "test chain existence in NSS"
+          command: "certutil -L -d /etc/dirsrv/slapd-{{ ldap_ds389_instance_name }}/ -a -n ca_chain "
+          register: used_chain_pem
+          failed_when: false
+          changed_when: false
+        - name: "first import of CA chain"
+          when: used_chain_pem.rc != 0
+          command: "dsctl {{ ldap_ds389_instance_name }} tls import-ca {{ ldap_ds389_certificate_chain_file }} ca_chain"
+        - name: "get chain from NSS in PEM format"
+          command: "certutil -L -d /etc/dirsrv/slapd-{{ ldap_ds389_instance_name }}/ -a -n ca_chain "
+          register: used_chain_pem
+          changed_when: false
+        - name: "parse PEM  into used_chain variable"
+          community.crypto.x509_certificate_info:
+            content: "{{ used_chain_pem.stdout }}"
+          register: used_chain
+        - name: "read file with requested chain into requested_chain variable"
+          community.crypto.x509_certificate_info:
+            path: "{{ ldap_ds389_certificate_chain_file }}"
+          register: requested_chain
+        - name: "replace chain"
+          when: requested_chain.serial_number != used_chain.serial_number
+          command: "dsctl {{ ldap_ds389_instance_name }} tls import-ca {{ ldap_ds389_certificate_file }} {{ ldap_ds389_certificate_key_file }}"
+    - name: "enable TLS"
+      block:
+        - name: "get security config"
+          command: "dsconf --json {{ ldap_ds389_instance_name }} security get"
+          register: ldap_ds389_security
+          changed_when: false
+        - name: "parse json output"
+          set_fact:
+            ldap_ds389_security_items: '{{ ( ldap_ds389_security.stdout | from_json )["items"] }}'
+        - debug:
+            var: ldap_ds389_security_items
+        - name: "set nsslapd-security to on"
+          when: not (ldap_ds389_security_items['nsslapd-security']|bool)
+          command: "dsconf {{ ldap_ds389_instance_name }} config replace nsslapd-security=on"
+          register: nsslapd_sec_on
+        - name: "restart instance"
+          when: nsslapd_sec_on.changed or replaced_cert.changed
+          systemd:
+            name: "dirsrv@{{ ldap_ds389_instance_name }}.service"
+            state: restarted
+
+
+- name: create directory /etc/ldap
+  file:
+        path: /etc/ldap
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+
+- name: "make sure the /etc/ldap/ldap.conf file exists (it is part of package libldap-common)"
+  template:
+    backup: true
+    src: ldap.conf.j2
+    dest: /etc/ldap/ldap.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+
+- name: "Pass-through authentication"
+  when: 
+    ldap_ds389_pass_through_authentication
+  block:
+    - name: "Install kerberos and sasl"
+      apt:
+        name:
+          - krb5-user
+          - sasl2-bin
+        state: present
+    - name: "krb5.conf"
+      get_url:
+        url: https://metavo.metacentrum.cz/krb5.conf
+        dest: /etc/krb5.conf
+        force: yes
+    - name: "saslauthd START=yes"
+      lineinfile:
+        path: /etc/default/saslauthd
+        regexp: 'START='
+        line: 'START=yes'
+      register: saslauthd1
+    - name: "saslauthd MECHANISMS=kerberos5"
+      lineinfile:
+        path: /etc/default/saslauthd
+        regexp: 'MECHANISMS='
+        line: 'MECHANISMS="kerberos5"'
+      register: saslauthd2
+    - name: "restart saslauthd"
+      service:
+        name: saslauthd
+        state: restarted
+      when: saslauthd1.changed or saslauthd2.changed
+
+- name: "Get current SASL mechanisms"
+  command: dsconf {{ ldap_ds389_instance_name }} config get nsslapd-allowed-sasl-mechanisms
+  register: current_sasl_config
+  changed_when: false
+  failed_when: current_sasl_config.rc != 0
+
+
+- name: "Set SASL mechanisms to PLAIN LOGIN"
+  command: dsconf {{ ldap_ds389_instance_name }} config replace nsslapd-allowed-sasl-mechanisms="GSSAPI"
+  when: "'GSSAPI' not in current_sasl_config.stdout"
+  register: sasl_config
+  changed_when: sasl_config.rc == 0 and sasl_config.stdout != ""
+
+
+- name: "Check if dirsrv is already in the sasl group"
+  command: groups dirsrv
+  register: groups_output
+  changed_when: false
+  failed_when: "'dirsrv' not in groups_output.stdout"
+
+
+- name: "Add 389 DS user to SASL group"
+  ansible.builtin.user:
+    name: dirsrv
+    groups: sasl
+    append: yes
+  when: "'sasl' not in groups_output.stdout"
+
+
+## If you are using Virtual List View (see Configuring Virtual List View Control), you are also already using Server-Side Sorting. 
+- name: "Enable plugins based on conditions"
+  become: true
+  command: dsconf {{ ldap_ds389_instance_name }}  plugin {{ item.plugin }} enable
+  loop:
+          - { plugin: 'memberof', condition: ldap_memberOf_overlay }
+          - { plugin: 'referential-integrity', condition: ldap_memberOf_overlay }
+          - { plugin: 'contentsync', condition: ldap_master_replica }
+          - { plugin: 'retro-changelog', condition: ldap_master_replica }
+  when: item.condition
+  register: plugin_enable_result
+  changed_when: "plugin_enable_result.rc != 0"
+
+
+#must restart server becouse then cant bind when setup password for user
+- name: "Ad user "
+  block:
+  - name: "Restart 389 DS"
+    systemd:
+          name: dirsrv@{{ ldap_ds389_instance_name }} 
+          state: restarted
+          enabled: yes  
+
+
+  - name: "Create users"
+    include_tasks: user_entry.yml
+    loop: "{{ ldap_ds389_users }}"
+    loop_control:
+        loop_var: user_entry
+
+
+- name: "Create ou=People branch"
+  ldap_entry:
+    dn: "ou=People,{{ ldap_ds389_basedn }}"
+    objectClass: organizationalUnit
+    state: present
+    bind_dn: "{{ ldap_ds389_root_dn }}"
+    bind_pw: "{{ ldap_ds389_root_pass }}"
+    server_uri: "ldaps://{{ ldap_ds389_server_name }}:636"
+    validate_certs: no 
+
+
+
+
+
+
+
+# # ####REPLICATION SECTION######################
+# # ##### THERE ARE TWO TIPES OF REPLICATION, CONSUMER AND SUPPLIER, YOU CAN SET UP BOTH OR JUST ONE OF THEM
+
+
+- name: "Set up replication consumer, when replication is on"
+  when: 
+         ldap_ds389_set_up_consumer_replica == true
+  block:
+    - name: "Check if the Consumer replication instance is already set up"
+      shell:
+        cmd: 
+             dsconf {{ ldap_ds389_instance_name }}  replication status --suffix "{{ ldap_ds389_basedn }}"
+      register: 
+             ds389_replication_consumer_status 
+      ignore_errors: true 
+    - name: "Create consumer for replication if it does not exist"
+      when: 
+             ds389_replication_consumer_status.rc != 0 
+      shell:
+          cmd: 
+             dsconf {{ ldap_ds389_instance_name }}  replication enable --suffix "{{ ldap_ds389_basedn }}" --role "consumer" --bind-dn "{{ ldap_ds389_repl_bind_dn }}" --bind-passwd "{{ ldap_ds389_repl_pass }}"
+          
+          
+
+
+- name: "Set up replication supplier , when replication is on"
+  when: 
+        - ldap_ds389_set_up_supplier_replica == true
+
+  block:
+    - name: "Check if the Supplier replication instance is already set up"
+      shell:
+        cmd: 
+             dsconf {{ ldap_ds389_instance_name }}  replication get --suffix "{{ ldap_ds389_basedn }}"
+      register: 
+             ds389_replication_supplier_status
+      ignore_errors: true 
+    - name: "Create supplier for replication if it does not exist"
+      when: 
+             ds389_replication_supplier_status.rc != 0  
+      shell:
+          cmd: 
+             dsconf {{ ldap_ds389_instance_name }}   replication enable --suffix "{{ ldap_ds389_basedn }}" --role "supplier" --replica-id 1
+    
+
+
+- name: "Chcek if the replication agreement already exist, when repl argmt is set on"
+  when: 
+        - ldap_ds389_set_up_supplier_replica == true
+        - ldap_ds389_replica_consumer_host | trim != ""
+        - ldap_ds389_replica_consumer_host is defined
+        - ldap_ds389_replication_argument_name is defined
+
+  block:
+    - name: "Check the replication agreement"
+      shell:
+        cmd: 
+          dsconf {{ ldap_ds389_instance_name }}  repl-agmt list --suffix "{{ ldap_ds389_basedn }}"
+      register: 
+          ds389_replication_agreement_status 
+      ignore_errors: true 
+
+    - name: "check  if the replica with same name is not already set up"
+      when: 
+           - ldap_ds389_replication_argument_name is defined
+           
+      set_fact:
+        replica_exists: "{{ 'cn: ' + ldap_ds389_replication_argument_name in ds389_replication_agreement_status.stdout }}"
+
+    - name: "set up agreement for replication"
+      when: 
+           - ds389_replication_agreement_status != 0
+           - ldap_ds389_set_up_supplier_replica == true
+           - not replica_exists
+           - ldap_ds389_replication_argument_name is defined
+      ignore_errors: true 
+      shell:
+       cmd: 
+           dsconf {{ ldap_ds389_instance_name }}  repl-agmt create --suffix "{{ ldap_ds389_basedn }}" --host "{{ ldap_ds389_replica_consumer_host }}"  --port 389 --conn-protocol=LDAP --bind-dn "{{ ldap_ds389_repl_bind_dn }}" --bind-passwd "{{ ldap_ds389_repl_pass }}" --bind-method=SIMPLE --init "{{ ldap_ds389_replication_argument_name }}"
+      register: set_up_argument 
+
+
+
+- name: "Check if the initialization wes successful"
+  when: set_up_argument == true
+  shell:
+        cmd: 
+          dsconf {{ ldap_ds389_instance_name }} repl-agmt init-status --suffix="{{ ldap_ds389_basedn }}" "{{ ldap_ds389_replication_argument_name }}"
