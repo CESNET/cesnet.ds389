@@ -1,0 +1,33 @@
+- assert:
+    that:
+      - user_entry.user is defined
+      - user_entry.password is defined
+      - user_entry.description is defined
+      - ldap_ds389_root_dn is defined
+      - ldap_ds389_root_pass is defined
+
+# the entry is created only if it does not exist; existing entry is NOT modified
+- name: "create {{ user_entry.user }} user entry"
+  ldap_entry:
+    dn: "cn={{ user_entry.user }},{{ ldap_ds389_basedn }}"
+    objectClass:
+      - simpleSecurityObject
+      - organizationalRole
+    attributes:
+      description: "{{ user_entry.description }}"
+      userPassword: "**************"
+    state: present
+    bind_dn: "{{ ldap_ds389_root_dn }}"
+    bind_pw: "{{ ldap_ds389_root_pass }}"
+    server_uri: "ldaps://{{ ldap_ds389_server_name }}:636"
+    validate_certs: no 
+
+# password is set only if it is different
+- name: "set password for {{ user_entry.user }}"
+  ldap_passwd:
+    dn: "cn={{ user_entry.user }},{{ ldap_ds389_basedn }}"
+    passwd: "{{ user_entry.password }}"
+    bind_dn: "{{ ldap_ds389_root_dn }}"
+    bind_pw: "{{ ldap_ds389_root_pass }}"
+    server_uri: "ldaps://{{ ldap_ds389_server_name }}:636"
+    validate_certs: no 
