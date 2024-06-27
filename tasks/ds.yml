@@ -6,7 +6,6 @@
     msg: "Only Debian 11+ is supported, this is {{ ansible_distribution }} {{ ansible_distribution_major_version }}"
     quiet: true
 
-
 - name: "Install 389 Direct Server"
   apt:
     state: present
@@ -15,17 +14,10 @@
       - 389-ds-base-libs
       - python3-ldap
 
-
 - name: "Test if instance exists"
   stat:
     path: "/etc/dirsrv/slapd-{{ldap_ds389_instance_name}}/dse.ldif"
   register: instance_file
-
-
-- name: "Debug instance file check"
-  debug:
-    msg: "Does instance file exist? {{ instance_file.stat.exists }}"
-
 
 - name: "Create instance"
   when: not instance_file.stat.exists
@@ -126,7 +118,6 @@
             name: "dirsrv@{{ ldap_ds389_instance_name }}.service"
             state: restarted
 
-
 - name: create directory /etc/ldap
   file:
         path: /etc/ldap
@@ -134,7 +125,6 @@
         owner: root
         group: root
         mode: '0755'
-
 
 - name: "make sure the /etc/ldap/ldap.conf file exists (it is part of package libldap-common)"
   template:
@@ -144,7 +134,6 @@
     owner: root
     group: root
     mode: '0644'
-
 
 - name: "Pass-through authentication"
   when: 
@@ -185,13 +174,11 @@
   changed_when: false
   failed_when: current_sasl_config.rc != 0
 
-
 - name: "Set SASL mechanisms to PLAIN LOGIN"
   command: dsconf {{ ldap_ds389_instance_name }} config replace nsslapd-allowed-sasl-mechanisms="GSSAPI"
   when: "'GSSAPI' not in current_sasl_config.stdout"
   register: sasl_config
   changed_when: sasl_config.rc == 0 and sasl_config.stdout != ""
-
 
 - name: "Check if dirsrv is already in the sasl group"
   command: groups dirsrv
@@ -199,14 +186,12 @@
   changed_when: false
   failed_when: "'dirsrv' not in groups_output.stdout"
 
-
 - name: "Add 389 DS user to SASL group"
   ansible.builtin.user:
     name: dirsrv
     groups: sasl
     append: yes
   when: "'sasl' not in groups_output.stdout"
-
 
 ## If you are using Virtual List View (see Configuring Virtual List View Control), you are also already using Server-Side Sorting. 
 - name: "Enable plugins based on conditions"
@@ -221,23 +206,20 @@
   register: plugin_enable_result
   changed_when: "plugin_enable_result.rc != 0"
 
-
-#must restart server becouse then cant bind when setup password for user
-- name: "Ad user "
+#must restart server because then can't bind when setup password for user
+- name: "Add users"
   block:
   - name: "Restart 389 DS"
     systemd:
-          name: dirsrv@{{ ldap_ds389_instance_name }} 
-          state: restarted
-          enabled: yes  
-
+      name: dirsrv@{{ ldap_ds389_instance_name }}
+      state: restarted
+      enabled: yes
 
   - name: "Create users"
     include_tasks: user_entry.yml
     loop: "{{ ldap_ds389_users }}"
     loop_control:
         loop_var: user_entry
-
 
 - name: "Create ou=People branch"
   ldap_entry:
@@ -249,97 +231,87 @@
     server_uri: "ldaps://{{ ldap_ds389_server_name }}:636"
     validate_certs: no 
 
-
-
-
-
-
-
 # # ####REPLICATION SECTION######################
 # # ##### THERE ARE TWO TIPES OF REPLICATION, CONSUMER AND SUPPLIER, YOU CAN SET UP BOTH OR JUST ONE OF THEM
 
-
 - name: "Set up replication consumer, when replication is on"
-  when: 
-         ldap_ds389_set_up_consumer_replica == true
+  when: ldap_ds389_set_up_consumer_replica
   block:
     - name: "Check if the Consumer replication instance is already set up"
       shell:
-        cmd: 
-             dsconf {{ ldap_ds389_instance_name }}  replication status --suffix "{{ ldap_ds389_basedn }}"
+        cmd: dsconf {{ ldap_ds389_instance_name }}  replication status --suffix "{{ ldap_ds389_basedn }}"
       register: 
-             ds389_replication_consumer_status 
+          ds389_replication_consumer_status
       ignore_errors: true 
     - name: "Create consumer for replication if it does not exist"
-      when: 
-             ds389_replication_consumer_status.rc != 0 
+      when: ds389_replication_consumer_status.rc != 0
       shell:
-          cmd: 
-             dsconf {{ ldap_ds389_instance_name }}  replication enable --suffix "{{ ldap_ds389_basedn }}" --role "consumer" --bind-dn "{{ ldap_ds389_repl_bind_dn }}" --bind-passwd "{{ ldap_ds389_repl_pass }}"
-          
-          
+        cmd: >-
+          dsconf {{ ldap_ds389_instance_name }} replication enable
+            --suffix "{{ ldap_ds389_basedn }}"
+            --role "consumer"
+            --bind-dn "{{ ldap_ds389_repl_bind_dn }}"
+           --bind-passwd "{{ ldap_ds389_repl_pass }}"
 
-
-- name: "Set up replication supplier , when replication is on"
-  when: 
-        - ldap_ds389_set_up_supplier_replica == true
-
+- name: "Set up replication supplier, when replication is on"
+  when: ldap_ds389_set_up_supplier_replica
   block:
     - name: "Check if the Supplier replication instance is already set up"
       shell:
-        cmd: 
-             dsconf {{ ldap_ds389_instance_name }}  replication get --suffix "{{ ldap_ds389_basedn }}"
-      register: 
-             ds389_replication_supplier_status
+        cmd: dsconf {{ ldap_ds389_instance_name }}  replication get --suffix "{{ ldap_ds389_basedn }}"
+      register: ds389_replication_supplier_status
       ignore_errors: true 
     - name: "Create supplier for replication if it does not exist"
-      when: 
-             ds389_replication_supplier_status.rc != 0  
+      when: ds389_replication_supplier_status.rc != 0
       shell:
-          cmd: 
-             dsconf {{ ldap_ds389_instance_name }}   replication enable --suffix "{{ ldap_ds389_basedn }}" --role "supplier" --replica-id 1
-    
+        cmd: >-
+          dsconf {{ ldap_ds389_instance_name }} replication enable
+            --suffix "{{ ldap_ds389_basedn }}"
+            --role "supplier"
+            --replica-id 1
 
-
-- name: "Chcek if the replication agreement already exist, when repl argmt is set on"
+- name: "Check if the replication agreement already exist, when repl argmt is set on"
   when: 
-        - ldap_ds389_set_up_supplier_replica == true
-        - ldap_ds389_replica_consumer_host | trim != ""
-        - ldap_ds389_replica_consumer_host is defined
-        - ldap_ds389_replication_argument_name is defined
-
+    - ldap_ds389_set_up_supplier_replica
+    - ldap_ds389_replica_consumer_host | trim != ""
+    - ldap_ds389_replica_consumer_host is defined
+    - ldap_ds389_replication_argument_name is defined
   block:
     - name: "Check the replication agreement"
       shell:
-        cmd: 
-          dsconf {{ ldap_ds389_instance_name }}  repl-agmt list --suffix "{{ ldap_ds389_basedn }}"
-      register: 
-          ds389_replication_agreement_status 
+        cmd: dsconf {{ ldap_ds389_instance_name }}  repl-agmt list --suffix "{{ ldap_ds389_basedn }}"
+      register: ds389_replication_agreement_status
       ignore_errors: true 
 
-    - name: "check  if the replica with same name is not already set up"
-      when: 
-           - ldap_ds389_replication_argument_name is defined
-           
+    - name: "check if the replica with same name is not already set up"
+      when: ldap_ds389_replication_argument_name is defined
       set_fact:
         replica_exists: "{{ 'cn: ' + ldap_ds389_replication_argument_name in ds389_replication_agreement_status.stdout }}"
 
     - name: "set up agreement for replication"
       when: 
-           - ds389_replication_agreement_status != 0
-           - ldap_ds389_set_up_supplier_replica == true
-           - not replica_exists
-           - ldap_ds389_replication_argument_name is defined
+        - ds389_replication_agreement_status != 0
+        - ldap_ds389_set_up_supplier_replica
+        - not replica_exists
+        - ldap_ds389_replication_argument_name is defined
       ignore_errors: true 
       shell:
-       cmd: 
-           dsconf {{ ldap_ds389_instance_name }}  repl-agmt create --suffix "{{ ldap_ds389_basedn }}" --host "{{ ldap_ds389_replica_consumer_host }}"  --port 389 --conn-protocol=LDAP --bind-dn "{{ ldap_ds389_repl_bind_dn }}" --bind-passwd "{{ ldap_ds389_repl_pass }}" --bind-method=SIMPLE --init "{{ ldap_ds389_replication_argument_name }}"
+       cmd: >-
+         dsconf {{ ldap_ds389_instance_name }} repl-agmt create
+           --suffix "{{ ldap_ds389_basedn }}"
+           --host "{{ ldap_ds389_replica_consumer_host }}"
+           --port 389
+           --conn-protocol=LDAP
+           --bind-dn "{{ ldap_ds389_repl_bind_dn }}"
+           --bind-passwd "{{ ldap_ds389_repl_pass }}"
+           --bind-method=SIMPLE
+           --init "{{ ldap_ds389_replication_argument_name }}"
       register: set_up_argument 
-
-
 
 - name: "Check if the initialization wes successful"
   when: set_up_argument == true
   shell:
-        cmd: 
-          dsconf {{ ldap_ds389_instance_name }} repl-agmt init-status --suffix="{{ ldap_ds389_basedn }}" "{{ ldap_ds389_replication_argument_name }}"
+    cmd: >-
+      dsconf {{ ldap_ds389_instance_name }} repl-agmt init-status
+        --suffix="{{ ldap_ds389_basedn }}"
+        "{{ ldap_ds389_replication_argument_name }}"
