@@ -120,11 +120,11 @@
 
 - name: create directory /etc/ldap
   file:
-        path: /etc/ldap
-        state: directory
-        owner: root
-        group: root
-        mode: '0755'
+    path: /etc/ldap
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
 
 - name: "make sure the /etc/ldap/ldap.conf file exists (it is part of package libldap-common)"
   template:
@@ -206,20 +206,11 @@
   register: plugin_enable_result
   changed_when: "plugin_enable_result.rc != 0"
 
-#must restart server because then can't bind when setup password for user
-- name: "Add users"
-  block:
-  - name: "Restart 389 DS"
-    systemd:
-      name: dirsrv@{{ ldap_ds389_instance_name }}
-      state: restarted
-      enabled: yes
-
-  - name: "Create users"
-    include_tasks: user_entry.yml
-    loop: "{{ ldap_ds389_users }}"
-    loop_control:
-        loop_var: user_entry
+- name: "Create users"
+  include_tasks: user_entry.yml
+  loop: "{{ ldap_ds389_users }}"
+  loop_control:
+    loop_var: user_entry
 
 - name: "Create ou=People branch"
   ldap_entry:
