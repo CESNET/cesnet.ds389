@@ -16,7 +16,7 @@
 
 - name: "Test if instance exists"
   stat:
-    path: "/etc/dirsrv/slapd-{{ldap_ds389_instance_name}}/dse.ldif"
+    path: "/etc/dirsrv/slapd-{{ ldap_ds389_instance_name }}/dse.ldif"
   register: instance_file
 
 - name: "Create instance"
@@ -29,6 +29,7 @@
     - name: "create instance from .inf file"
       shell:
         cmd: dscreate from-file /tmp/ds389.inf
+# to remove instance: "dsctl {{ ldap_ds389_instance_name }} remove --do-it"
 
 - name: "TLS setup"
   # This code is complex because DS389 does not read certificates from files, it uses a NSS database located in files

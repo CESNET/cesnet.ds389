@@ -1,8 +1,8 @@
-ldap_ds389_server_name: "{{ inventory_hostnamee }}"
-ldap_ds389_full_instance_name: "example.org"
-ldap_ds389_instance_name: '{{ perun_ldap_ds389_full_instance_name.split(".")[0] }}'
+ldap_ds389_server_name: "{{ inventory_hostname }}"
+ldap_ds389_instance_name: localhost
 
-ldap_ds389_basedn: '{{ "dc=" + ldap_ds389_instance_name.split(".") | join(",dc=") }}'
+ldap_ds389_domain: example.org
+ldap_ds389_basedn: '{{ "dc=" + ldap_ds389_domain.split(".") | join(",dc=") }}'
 ldap_ds389_root_dn: '{{ "cn=admin," + ldap_ds389_basedn }}'  
 ldap_ds389_root_pass: "testtest"
 
@@ -12,8 +12,8 @@ ldap_ds389_certificate_chain_file: "/etc/letsencrypt/live/multi/chain.pem"
 
 ldap_ds389_repl_bind_dn: "cn=replication manager,cn=config"
 ldap_ds389_repl_pass: "password1233"
-ldap_ds389_set_up_consumer_replica: false
 ldap_ds389_set_up_supplier_replica: false
+ldap_ds389_set_up_consumer_replica: false
 ldap_ds389_replication_argument_name: ""
 ldap_ds389_replica_consumer_host: ""
 
